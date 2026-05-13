@@ -10,11 +10,16 @@ set -euo pipefail
 main() {
     if [[ $# -eq 0 ]]; then
         cat <<EOF
-'wt' is a wrapper around 'git worktree' to simplify managing multiple worktrees.
+'wt' is a wrapper around 'git worktree' to simplify managing multiple worktrees
+for a single bare-cloned repository at a time.
 
 Usage: wt <command> [options] [branch/wt name or substring of it]
 
 Commands:
+
+    wt configure <path-to-bare-repo>
+        Point wt at a bare-cloned repository.
+        - Only one repository can be configured at a time.
 
     wt add <branch-name-or-unique-substring>
         Create a new worktree for the specified branch.
@@ -27,23 +32,21 @@ Commands:
     wt list
         List all existing worktrees.
 
-    wt rebase [<upstream>]
+    wt rebase [<remote-branch>]
         Fetch origin and rebase the current worktree branch.
-        - Defaults to origin/main if no upstream is specified.
+        - Defaults to origin/main if no remote-branch is specified.
+        - Automatically prepends 'origin/' if no remote prefix is given.
 
     wt <worktree-name-or-unique-substring> 
         Open the specified worktree.
-
-Environment:
-    WT_BASE   Path to the bare/main repo (required).
 EOF
         return 1
     fi
 
-    # Ensure the user has set the base path
+    # Ensure a repository has been configured
     if [[ -z "${WT_BASE:-}" ]]; then
-        echo "Error: Please set WT_BASE to the target repo."
-        echo "  export WT_BASE=/path/to/your/repo"
+        echo "Error: No repository configured."
+        echo "  wt configure /path/to/your/bare/repo"
         return 1
     fi
 
@@ -54,6 +57,10 @@ EOF
     shift
 
     case "$cmd" in
+        configure)
+            _wt_configure "$@"
+            return $?
+            ;;
         add)
             _wt_add "$1"
             ;;
@@ -70,6 +77,39 @@ EOF
             _wt_open "$cmd" "$@"
             ;;
     esac
+}
+
+_wt_configure() {
+    if [[ $# -eq 0 || -z "$1" ]]; then
+        echo "Usage: wt configure <path-to-bare-repo>"
+        return 1
+    fi
+
+    local repo_path
+    repo_path=$(cd "$1" 2>/dev/null && pwd) || {
+        echo "Error: '$1' is not a valid directory."
+        return 1
+    }
+
+    # Verify it looks like a bare git repo
+    if ! git -C "$repo_path" rev-parse --is-bare-repository &>/dev/null \
+       || [[ "$(git -C "$repo_path" rev-parse --is-bare-repository 2>/dev/null)" != "true" ]]; then
+        echo "Error: '$repo_path' is not a bare git repository."
+        echo "Clone with: git clone --bare <url> $repo_path"
+        return 1
+    fi
+
+    local zshrc="${HOME}/.zshrc"
+
+    # Remove any existing WT_BASE export line
+    if grep -q '^export WT_BASE=' "$zshrc" 2>/dev/null; then
+        sed -i '' '/^export WT_BASE=/d' "$zshrc"
+    fi
+
+    printf '\n# used by wt (git worktree wrapper)\nexport WT_BASE="%s"\n' "$repo_path" >> "$zshrc"
+    export WT_BASE="$repo_path"
+
+    echo "wt is now based on: $repo_path repo"
 }
 
 _wt_add() {
@@ -191,13 +231,24 @@ _wt_list() {
 _wt_rebase() {
     local work_dir="$1"
     shift
-    local upstream="${1:-origin/main}"
+    local branch="${1:-main}"
+
+    # Prepend origin/ if no remote prefix is present
+    local upstream="$branch"
+    if [[ "$branch" != */* ]]; then
+        upstream="origin/$branch"
+    fi
 
     # Validate we're inside a worktree
     if ! git -C "$work_dir" rev-parse --is-inside-work-tree &>/dev/null; then
         echo "Error: '$work_dir' is not inside a git worktree."
         echo "Run 'wt rebase' from within a worktree directory."
         return 1
+    fi
+
+    # Ensure fetch refspec exists (bare clones often lack it)
+    if ! git config --get remote.origin.fetch &>/dev/null; then
+        git config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'
     fi
 
     git fetch origin --prune

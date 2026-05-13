@@ -1,0 +1,13 @@
+[project]
+name = "ciq-curl"
+version = "1.0.0"
+description = "Authenticated curl wrapper for Cisco IQ APIs"
+requires-python = ">=3.11"
+dependencies = ["requests"]
+
+[project.scripts]
+ciq-curl = "ciq_curl:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
