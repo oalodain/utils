@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Recover from deleted CWD (e.g., after removing a worktree)
+if ! cd -P . 2>/dev/null; then
+    cd "${WT_BASE:-$HOME}" 2>/dev/null || cd /
+    echo "Warning: previous directory no longer exists, moved to $PWD" >&2
+fi
+
 
 ################################################
 ############### Git Work-trees #################

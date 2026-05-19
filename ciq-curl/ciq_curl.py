@@ -41,7 +41,10 @@ import os
 import sys
 from typing import IO
 from urllib.parse import urlparse
+import urllib3
 import requests
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
 class CIQSession:
