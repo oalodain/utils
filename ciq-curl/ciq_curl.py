@@ -173,8 +173,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("-o", "--output", dest="output", default=None)
     parser.add_argument("-v", "--verbose", dest="verbose", action="store_true")
     parser.add_argument("-s", "--silent", dest="silent", action="store_true")
-    parser.add_argument("-k", "--insecure", dest="insecure", action="store_true",
-                        help="Disable TLS certificate verification")
     parser.add_argument("--cookies", dest="cookies", default=None,
                         help="Path to JSON file containing cookies to inject into requests")
     parser.add_argument("--no-auth", dest="no_auth", action="store_true",
