@@ -33,6 +33,9 @@ Usage:
 
     # Output to file (like curl -o)
     ciq-curl -o output.json https://host/path
+
+    # Load cookies from JSON file
+    ciq-curl --cookies cookies.json https://host/path
 """
 
 import argparse
@@ -50,12 +53,34 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 class CIQSession:
     """Manages authentication and XSRF tokens for Cisco IQ APIs."""
 
-    def __init__(self, base_url: str, *, verify: bool = True):
+    def __init__(self, base_url: str, *, verify: bool = True, cookies_file: str | None = None, skip_auth: bool = False):
         self.base_url = base_url.rstrip("/")
         self.verify = verify
         self.session = requests.Session()
         self.session.verify = verify
         self._authenticated = False
+        self.skip_auth = skip_auth
+        if cookies_file:
+            self._load_cookies(cookies_file)
+
+    def _load_cookies(self, cookies_file: str) -> None:
+        """Load cookies from a JSON file into the session."""
+        try:
+            with open(cookies_file, "r") as f:
+                data = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError) as e:
+            print(f"Error reading cookies file: {e}", file=sys.stderr)
+            sys.exit(1)
+
+        # Extract cookies from the "Request Cookies" object, or use top-level if it's a flat dict
+        cookies_data = data.get("Request Cookies", data)
+        
+        if not isinstance(cookies_data, dict):
+            print("Error: cookies file must contain a dict or 'Request Cookies' object", file=sys.stderr)
+            sys.exit(1)
+
+        for key, value in cookies_data.items():
+            self.session.cookies.set(key, value)
 
     def _login(self) -> None:
         password = os.environ.get("CIQ_PASSWORD")
@@ -71,18 +96,23 @@ class CIQSession:
             print(f"Login failed ({resp.status_code}): {resp.text}", file=sys.stderr)
             sys.exit(1)
 
-        # After login, make a GET to obtain the XSRF token cookie.
-        self.session.get(f"{self.base_url}/cxue-platform-mgr/api/v1/system/version")
         self._authenticated = True
 
     def _ensure_auth(self) -> None:
-        if not self._authenticated:
+        if not self._authenticated and not self.skip_auth:
             self._login()
 
     def _inject_xsrf(self, method: str) -> dict[str, str]:
         """Return XSRF header dict for mutating methods."""
         if method.upper() in ("POST", "PUT", "PATCH", "DELETE"):
             token = self.session.cookies.get("X-XSRF-TOKEN")
+            # Refresh token only when missing.
+            if not token:
+                try:
+                    self.session.get(f"{self.base_url}/cxue-platform-mgr/api/v1/system/version")
+                except requests.RequestException:
+                    pass
+                token = self.session.cookies.get("X-XSRF-TOKEN")
             if token:
                 return {"X-XSRF-TOKEN": token}
         return {}
@@ -119,8 +149,8 @@ class CIQSession:
 
         resp = self.session.request(method, url, **kwargs)
 
-        # If we get a 401/403, re-authenticate once and retry.
-        if resp.status_code in (401, 403) and self._authenticated:
+        # If we get a 401/403, re-authenticate once and retry (unless skip_auth is set).
+        if resp.status_code in (401, 403) and self._authenticated and not self.skip_auth:
             self._authenticated = False
             self._login()
             req_headers.update(self._inject_xsrf(method))
@@ -143,6 +173,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("-o", "--output", dest="output", default=None)
     parser.add_argument("-v", "--verbose", dest="verbose", action="store_true")
     parser.add_argument("-s", "--silent", dest="silent", action="store_true")
+    parser.add_argument("-k", "--insecure", dest="insecure", action="store_true",
+                        help="Disable TLS certificate verification")
+    parser.add_argument("--cookies", dest="cookies", default=None,
+                        help="Path to JSON file containing cookies to inject into requests")
+    parser.add_argument("--no-auth", dest="no_auth", action="store_true",
+                        help="Skip authentication and use only cookies from file")
 
     args = parser.parse_args(argv)
 
@@ -164,7 +200,7 @@ def main(argv: list[str] | None = None) -> int:
     parsed = urlparse(full_url)
     base_url = f"{parsed.scheme}://{parsed.netloc}"
 
-    ciq = CIQSession(base_url, verify=False)
+    ciq = CIQSession(base_url, verify=False, cookies_file=args.cookies, skip_auth=args.no_auth)
 
     # Parse extra headers
     headers: dict[str, str] = {}
